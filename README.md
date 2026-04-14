@@ -4,7 +4,9 @@
 
 Supervisor оркеструє ітеративний цикл дослідження: Planner декомпозує запит, Researcher виконує глибокий аналіз, а Critic верифікує результати і може повернути на доопрацювання. Збереження звіту захищене через **Human-in-the-Loop (HITL)** — користувач затверджує, редагує або відхиляє фінальний документ.
 
-> Розширення Research Agent із homework-lesson-5 до мультиагентної архітектури (homework-lesson-8).
+Система покрита автоматизованими тестами через **DeepEval** з golden dataset, компонентними тестами та e2e evaluation pipeline.
+
+> Розширення мультиагентної системи (homework-lesson-8) + тестовий пакет (homework-lesson-10).
 
 ---
 
@@ -46,23 +48,57 @@ Supervisor Agent
 - **Ітеративне дослідження**: Critic може повернути Researcher на доопрацювання з конкретним зворотним зв'язком (evaluator-optimizer патерн)
 - **HITL (Human-in-the-Loop)**: `HumanInTheLoopMiddleware` перехоплює `save_report` — користувач затверджує, редагує або відхиляє звіт
 - **RAG з гібридним пошуком**: FAISS (семантичний) + BM25 (лексичний) + CrossEncoder реранкінг
-- **Стрімування**: Реальний час виводу через `stream_mode=["updates", "messages"]` з `version="v2"`
+- **Стрімування**: Реальний час виводу через `stream_mode=["updates", "messages"]`
+- **Автоматизовані тести**: DeepEval із GEval метриками, ToolCorrectness та e2e evaluation
 
 ---
 
 ## 🛠 Технологічний стек
 
-- **LLM**: Google Gemini (`gemini-2.5-flash`) через `ChatGoogleGenerativeAI`
-- **Агентний фреймворк**: `langchain.agents.create_agent` + `langchain.agents.middleware.HumanInTheLoopMiddleware`
+- **LLM**: Google Gemini (`gemini-3-flash-preview`) через `ChatGoogleGenerativeAI`
+- **Агентний фреймворк**: `langchain.agents.create_agent` + `HumanInTheLoopMiddleware`
 - **Персистентність**: `langgraph.checkpoint.memory.InMemorySaver`
 - **RAG-пайплайн**: `FAISS`, `OpenAIEmbeddings` (`text-embedding-3-small`), `BM25Retriever`, `HuggingFaceCrossEncoder` (`BAAI/bge-reranker-base`), `EnsembleRetriever`
 - **Structured Output**: Pydantic `BaseModel` через `response_format` параметр `create_agent`
+- **Тестування**: `DeepEval` (GEval, AnswerRelevancy, ToolCorrectness), `pytest`
 - **Інструменти**:
   - `knowledge_search` — пошук у локальній базі знань (RAG)
   - `web_search` — пошук в інтернеті (DuckDuckGo)
   - `read_url` — витягування тексту веб-сторінки (trafilatura)
   - `save_report` — збереження звіту (HITL-захищений)
 - **Конфігурація**: Pydantic `BaseSettings` + `.env`
+
+---
+
+## 📁 Структура проєкту
+
+```
+homework-lesson-10/
+├── main.py                  # REPL з HITL interrupt/resume loop
+├── supervisor.py            # Supervisor Agent + HITL middleware
+├── agents/
+│   ├── __init__.py
+│   ├── planner.py           # Planner Agent (response_format=ResearchPlan)
+│   ├── research.py          # Research Agent
+│   └── critic.py            # Critic Agent (response_format=CritiqueResult)
+├── tests/
+│   ├── golden_dataset.json  # 15 golden examples (happy path + edge + failure)
+│   ├── test_planner.py      # GEval Plan Quality
+│   ├── test_researcher.py   # GEval Groundedness
+│   ├── test_critic.py       # GEval Critique Quality
+│   ├── test_tools.py        # ToolCorrectnessMetric (3 cases)
+│   └── test_e2e.py          # E2E evaluation на повному golden dataset
+├── schemas.py               # Pydantic-моделі: ResearchPlan, CritiqueResult
+├── tools.py                 # web_search, read_url, knowledge_search, save_report
+├── retriever.py             # Hybrid search: FAISS + BM25 + CrossEncoder reranking
+├── ingest.py                # Ingestion pipeline: PDF → chunks → FAISS index
+├── config.py                # System prompts (4 агенти) + Settings
+├── requirements.txt         # Залежності
+├── data/                    # Вхідні PDF-документи для RAG
+├── index/                   # Згенеровані індекси (не в Git)
+├── example_output/          # Приклади згенерованих звітів
+└── .env                     # API-ключі (не в Git)
+```
 
 ---
 
@@ -77,8 +113,7 @@ cd homework-lesson-10
 ### 2. Створення віртуального середовища
 ```bash
 python -m venv venv
-source venv/bin/activate 
-
+source venv/bin/activate
 ```
 
 ### 3. Встановлення залежностей
@@ -99,12 +134,49 @@ OPENAI_API_KEY="sk-proj-YourOpenAiKey..."
 ```bash
 python ingest.py
 ```
-Скрипт поріже документи на чанки, згенерує вектори через `OpenAIEmbeddings` і збереже індекси FAISS та BM25 у папку `index/`.
 
 ### 6. Запуск системи
 ```bash
 python main.py
 ```
+
+---
+
+## 🧪 Тестування (DeepEval)
+
+### Запуск усіх тестів
+```bash
+deepeval test run tests/
+```
+
+### Запуск окремих файлів
+```bash
+deepeval test run tests/test_planner.py -v
+deepeval test run tests/test_researcher.py -v
+deepeval test run tests/test_critic.py -v
+deepeval test run tests/test_tools.py -v
+deepeval test run tests/test_e2e.py -v
+```
+
+### Структура тестів
+
+| Файл | Що тестує | Метрика | Поріг |
+|------|-----------|---------|-------|
+| `test_planner.py` | Якість плану (конкретні запити, джерела, формат) | `GEval("Plan Quality")` | 0.7 |
+| `test_researcher.py` | Обґрунтованість відповіді на джерелах | `GEval("Groundedness")` | 0.7 |
+| `test_critic.py` | Конкретність критики та actionability | `GEval("Critique Quality")` | 0.7 |
+| `test_tools.py` | Правильність викликів інструментів | `ToolCorrectnessMetric` | 0.5 |
+| `test_e2e.py` | Повний pipeline на golden dataset | `GEval("Correctness")` + `AnswerRelevancyMetric` | 0.6 / 0.7 |
+
+### Golden Dataset
+
+`tests/golden_dataset.json` містить **15 прикладів** у трьох категоріях:
+
+| Категорія | Кількість | Опис |
+|-----------|-----------|------|
+| `happy_path` | 5 | Типові дослідницькі запити |
+| `edge_cases` | 5 | Неоднозначні, мультимовні, несумісні запити |
+| `failure_cases` | 5 | Безглузді, заборонені, неможливі запити |
 
 ---
 
@@ -139,53 +211,13 @@ You: Compare RAG approaches: naive, sentence-window, and parent-child. Write a r
 ============================================================
   Tool:  save_report
   File:  rag_comparison.md
-  Content preview:
-# Comparison of RAG Approaches...
 
 👉 approve / edit / reject: approve
 
 ✅ Approved!
 
-🤖 Supervisor: Звіт збережено у output/rag_comparison.md
+🤖 Supervisor: Звіт збережено у example_output/rag_comparison.md
 ```
-
----
-
-## 📁 Структура проєкту
-
-```
-homework-lesson-8/
-├── main.py              # REPL з HITL interrupt/resume loop
-├── supervisor.py        # Supervisor Agent + HITL middleware
-├── agents/
-│   ├── __init__.py
-│   ├── planner.py       # Planner Agent (response_format=ResearchPlan)
-│   ├── research.py      # Research Agent (перевикористання hw5 tools)
-│   └── critic.py        # Critic Agent (response_format=CritiqueResult)
-├── schemas.py           # Pydantic-моделі: ResearchPlan, CritiqueResult
-├── tools.py             # web_search, read_url, knowledge_search, save_report
-├── retriever.py         # Hybrid search: FAISS + BM25 + CrossEncoder reranking
-├── ingest.py            # Ingestion pipeline: PDF → chunks → FAISS index
-├── config.py            # System prompts (4 агенти) + Settings
-├── requirements.txt     # Залежності
-├── data/                # Вхідні PDF-документи для RAG
-├── index/               # Згенеровані індекси (не в Git)
-├── output/              # Згенеровані звіти
-└── .env                 # API-ключі (не в Git)
-```
-
----
-
-## 🔄 Що змінилося порівняно з homework-5
-
-| Було (hw5) | Стало (hw8) |
-|------------|-------------|
-| Один Research Agent з 6 інструментами | Supervisor + 3 суб-агенти |
-| `create_react_agent` (LangGraph prebuilt) | `create_agent` з `langchain.agents` |
-| Агент робить усе одразу | Plan → Research → Critique цикл |
-| Одноразове дослідження | Ітеративне: Critic може повернути на доопрацювання |
-| Без потоку затвердження | HITL: save_report потребує approve/edit/reject |
-| Лише вільний текст | Structured output через Pydantic (ResearchPlan, CritiqueResult) |
 
 ---
 
