@@ -144,19 +144,59 @@ python main.py
 
 ## 🧪 Тестування (DeepEval)
 
-### Запуск усіх тестів
+### Передумови
+
+DeepEval використовує **`gpt-4o-mini` як judge-модель** для оцінки GEval метрик.  
+Перед запуском тестів переконайтеся, що:
+
+1. `OPENAI_API_KEY` задано у `.env` (або как змінна середовища)
+2. `GEMINI_API_KEY` задано у `.env` (для запуску самих агентів)
+3. Віртуальне середовище активоване:
+   ```bash
+   source venv/bin/activate
+   ```
+
+> **Важливо:** тести запускаються з кореневої директорії проєкту, оскільки агенти імпортуються відносно неї.
+
+---
+
+### Запуск тестів
+
+#### Усі тести
 ```bash
 deepeval test run tests/
 ```
 
-### Запуск окремих файлів
+#### Окремі файли з verbose-виводом
 ```bash
+# Компонентні тести
 deepeval test run tests/test_planner.py -v
 deepeval test run tests/test_researcher.py -v
 deepeval test run tests/test_critic.py -v
+
+# Tool correctness
 deepeval test run tests/test_tools.py -v
+
+# E2E на повному golden dataset (найдовший — запускає реальний pipeline)
 deepeval test run tests/test_e2e.py -v
 ```
+
+#### Корисні флаги
+
+| Флаг | Опис |
+|------|------|
+| `-v` | Verbose: показує score та причину для кожного тесту |
+| `-c` | Використовує кеш попередніх оцінок (економить токени при перезапусках) |
+| `-x` | Зупиняється після першого провалу |
+| `-n 4` | Паралельний запуск у 4 процеси |
+| `--display failing` | Показує тільки тести, що провалились |
+
+```bash
+# Приклад: verbose + кеш + тільки failing
+deepeval test run tests/ -v -c --display failing
+```
+
+---
 
 ### Структура тестів
 
@@ -168,6 +208,8 @@ deepeval test run tests/test_e2e.py -v
 | `test_tools.py` | Правильність викликів інструментів | `ToolCorrectnessMetric` | 0.5 |
 | `test_e2e.py` | Повний pipeline на golden dataset | `GEval("Correctness")` + `AnswerRelevancyMetric` | 0.6 / 0.7 |
 
+---
+
 ### Golden Dataset
 
 `tests/golden_dataset.json` містить **15 прикладів** у трьох категоріях:
@@ -175,8 +217,45 @@ deepeval test run tests/test_e2e.py -v
 | Категорія | Кількість | Опис |
 |-----------|-----------|------|
 | `happy_path` | 5 | Типові дослідницькі запити |
-| `edge_cases` | 5 | Неоднозначні, мультимовні, несумісні запити |
-| `failure_cases` | 5 | Безглузді, заборонені, неможливі запити |
+| `edge_cases` | 5 | Неоднозначні, мультимовні, логічно некоректні запити |
+| `failure_cases` | 5 | Безглузді, заборонені, нездійсненні запити |
+
+---
+
+### Очікуваний вивід
+
+```
+$ deepeval test run tests/ -v
+
+Running 5 test files...
+
+tests/test_planner.py
+  ✅ test_plan_quality       (Plan Quality: 0.85, threshold: 0.7)
+  ✅ test_plan_has_queries   (Plan Quality: 0.90, threshold: 0.7)
+
+tests/test_researcher.py
+  ✅ test_research_grounded  (Groundedness: 0.78, threshold: 0.7)
+  ❌ test_research_edge_case (Groundedness: 0.45, threshold: 0.7)
+
+tests/test_critic.py
+  ✅ test_critique_approve   (Critique Quality: 0.92, threshold: 0.7)
+  ✅ test_critique_revise    (Critique Quality: 0.88, threshold: 0.7)
+
+tests/test_tools.py
+  ✅ test_planner_tools      (Tool Correctness: 1.0, threshold: 0.5)
+  ✅ test_researcher_tools   (Tool Correctness: 1.0, threshold: 0.5)
+  ✅ test_supervisor_save    (Tool Correctness: 1.0, threshold: 0.5)
+
+tests/test_e2e.py
+  ✅ test_golden_dataset [happy_path cases passed]
+  ✅ test_golden_dataset [edge_cases passed]
+  ❌ test_golden_dataset [some failure_cases failed — expected behavior]
+
+======================================================
+Overall: ~19/22 passed
+```
+
+> Деякі тести можуть fail — це нормально. Мета не 100% pass rate, а зафіксувати **baseline** і поступово покращувати систему.
 
 ---
 
